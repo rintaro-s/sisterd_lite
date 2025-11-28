@@ -1,0 +1,18 @@
+{
+  "task_1764289406498": {
+    "id": "task_1764289406498",
+    "name": "cp_test",
+    "description": "test task",
+    "command": "/bin/echo test",
+    "scheduled_time": 1764289466.4986908,
+    "status": "completed",
+    "repeat": "once",
+    "repeat_interval": 0,
+    "created_at": 1764289406.4986997,
+    "last_run": 1764289473.1765983,
+    "next_run": 1764289466.4986908,
+    "run_count": 1,
+    "max_runs": null,
+    "enabled": false
+  }
+}
