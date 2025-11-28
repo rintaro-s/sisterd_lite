@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import signal
 import sys
@@ -117,6 +118,10 @@ class HTTPServer:
     def _setup_routes(self):
         """Setup HTTP routes"""
         self.app.add_routes([
+            # Accept root GET for simple health/info checks and
+            # root POST to support clients that POST messages to '/'.
+            aiohttp.web.get('/', self.handle_root),
+            aiohttp.web.post('/', self.handle_mcp_call),
             aiohttp.web.get('/health', self.handle_health),
             aiohttp.web.get('/mcp/tools', self.handle_mcp_tools),
             aiohttp.web.post('/mcp/call', self.handle_mcp_call),
@@ -148,6 +153,9 @@ class HTTPServer:
         """Execute MCP tool"""
         try:
             data = await request.json()
+            if isinstance(data, dict) and data.get('method'):
+                mcp_response = await self.mcp.process_request(data)
+                return aiohttp.web.json_response(mcp_response)
             tool_name = data.get('name')
             arguments = data.get('arguments', {})
             
@@ -160,6 +168,9 @@ class HTTPServer:
             result = await self.mcp.call_tool(tool_name, arguments)
             return aiohttp.web.json_response({'result': result})
         
+        except json.JSONDecodeError:
+            logger.info("Received non-JSON MCP request")
+            return aiohttp.web.json_response({'error': 'Invalid JSON'}, status=400)
         except Exception as e:
             logger.error(f"MCP call error: {e}", exc_info=True)
             return aiohttp.web.json_response(
@@ -172,6 +183,49 @@ class HTTPServer:
         limit = int(request.query.get('limit', 100))
         events = list(self.neurobus.query(limit=limit))
         return aiohttp.web.json_response({'events': events})
+
+    async def handle_root(self, request) -> aiohttp.web.Response:
+        """Root endpoint: mirror health for simple checks or basic clients
+
+        Some clients (or extensions) attempt to POST to `/` or expect a
+        simple health response at `/`. To improve compatibility we accept
+        POST at `/` (forwarded to the MCP call handler) and respond to GET
+        with the same payload as `/health`.
+        """
+        if request.method == 'GET':
+            return await self.handle_health(request)
+
+        # For POST, attempt to read the body and handle a few common
+        # compatibility cases. Log the incoming request payload for debugging.
+        try:
+            raw = await request.text()
+        except Exception:
+            raw = ''
+
+        log_payload = raw.strip()
+        if log_payload:
+            logger.info(f"POST / payload: {log_payload}")
+        else:
+            logger.info("POST / received empty body")
+
+        # Try to parse JSON and detect JSON-RPC 'initialize' (VS Code expects this)
+        try:
+            payload = json.loads(raw) if raw else {}
+        except Exception:
+            payload = None
+
+        if isinstance(payload, dict) and ('method' in payload or 'name' in payload):
+            class _FakeReq:
+                def __init__(self, payload):
+                    self._payload = payload
+                async def json(self):
+                    return self._payload
+            return await self.handle_mcp_call(_FakeReq(payload))
+
+        return aiohttp.web.json_response(
+            {'error': 'Unsupported request on /'},
+            status=400
+        )
     
     async def handle_mode_get(self, request) -> aiohttp.web.Response:
         """Get current mode"""

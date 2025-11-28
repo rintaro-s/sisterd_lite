@@ -14,5 +14,37 @@
     "run_count": 1,
     "max_runs": null,
     "enabled": false
+  },
+  "task_1764313440894": {
+    "id": "task_1764313440894",
+    "name": "test_auto",
+    "description": "automated test",
+    "command": "/bin/true",
+    "scheduled_time": 1764313500.894464,
+    "status": "completed",
+    "repeat": "once",
+    "repeat_interval": 0,
+    "created_at": 1764313440.8944688,
+    "last_run": 1764313506.1094725,
+    "next_run": 1764313500.894464,
+    "run_count": 1,
+    "max_runs": null,
+    "enabled": false
+  },
+  "task_1764313793557": {
+    "id": "task_1764313793557",
+    "name": "test_auto",
+    "description": "automated test",
+    "command": "/bin/true",
+    "scheduled_time": 1764313853.5570269,
+    "status": "completed",
+    "repeat": "once",
+    "repeat_interval": 0,
+    "created_at": 1764313793.5570314,
+    "last_run": 1764314458.9849935,
+    "next_run": 1764313853.5570269,
+    "run_count": 1,
+    "max_runs": null,
+    "enabled": false
   }
 }
