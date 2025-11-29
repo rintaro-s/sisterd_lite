@@ -50,6 +50,108 @@ echo $!
 curl -sS http://127.0.0.1:8089/health | jq .
 ```
 
+## MCP Server
+
+systerd-lite は汎用的な MCP サーバーとして動作し、様々なクライアントと連携できます。
+
+### 統合 MCP サーバー
+
+`mcp_server_unified.py` は stdio / HTTP / SSE の3つのトランスポートをサポートする統合サーバーです。
+
+**起動方法**:
+
+```zsh
+# stdio モード (デフォルト) - VS Code / Claude Desktop 用
+python3 mcp_server_unified.py
+
+# HTTP モード - Ollama / Web クライアント用
+python3 mcp_server_unified.py --http --port 8090
+
+# SSE モード - ストリーミング対応クライアント用
+python3 mcp_server_unified.py --sse --port 8090
+```
+
+### Claude Desktop 設定
+
+`~/.config/claude/claude_desktop_config.json` に以下を追加:
+
+```json
+{
+  "mcpServers": {
+    "systerd": {
+      "command": "python3",
+      "args": ["/path/to/mcp_server_unified.py"]
+    }
+  }
+}
+```
+
+### VS Code 設定
+
+`.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "systerd": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["/path/to/mcp_server_unified.py"]
+    }
+  }
+}
+```
+
+### Ollama / HTTP クライアント
+
+HTTP サーバーを起動後、以下のエンドポイントが利用可能:
+
+- `GET /health` - ヘルスチェック
+- `GET /tools` - 有効なツール一覧
+- `POST /call` - ツール実行 `{"name": "tool_name", "arguments": {...}}`
+- `POST /mcp` - JSON-RPC エンドポイント
+
+```zsh
+# 有効なツール一覧
+curl http://localhost:8090/tools
+
+# ツール実行
+curl -X POST http://localhost:8090/call \
+  -H "Content-Type: application/json" \
+  -d '{"name": "get_uptime", "arguments": {}}'
+
+# JSON-RPC 形式
+curl -X POST http://localhost:8090/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}'
+```
+
+### ツール管理
+
+187個のツールから必要なものだけを有効化できます。テンプレートを使って一括設定が可能:
+
+```zsh
+# minimal: 監視ツールのみ (17ツール)
+curl -X POST http://localhost:8090/call \
+  -d '{"name": "apply_mcp_template", "arguments": {"template": "minimal"}}'
+
+# development: 開発向け (コンテナ、計算機能含む)
+curl -X POST http://localhost:8090/call \
+  -d '{"name": "apply_mcp_template", "arguments": {"template": "development"}}'
+
+# security: セキュリティ監査
+curl -X POST http://localhost:8090/call \
+  -d '{"name": "apply_mcp_template", "arguments": {"template": "security"}}'
+
+# full: 全ツール有効 (187ツール)
+curl -X POST http://localhost:8090/call \
+  -d '{"name": "apply_mcp_template", "arguments": {"template": "full"}}'
+```
+
+設定は `.state/permissions.json` に保存され、サーバー再起動後も維持されます。
+
+---
+
 - MCP ツール一覧:
 
 ```zsh

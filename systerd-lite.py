@@ -705,19 +705,22 @@ def create_gradio_ui(mcp: MCPHandler, neurobus: NeuroBus,
                         return tool_list_result
                     
                     target_perm = Permission.AI_AUTO if action == "Enable All" else Permission.DISABLED
-                    updated = []
+                    permissions_batch = {}
                     
                     for tool_info in tool_list_result.get("tools", []):
                         tool_name = tool_info["name"]
-                        permissions.set_permission(tool_name, target_perm)
-                        updated.append(tool_name)
+                        permissions_batch[tool_name] = target_perm
+                    
+                    # Save all at once
+                    permissions.set_permissions_batch(permissions_batch)
                     
                     return {
                         "category": category,
                         "action": action,
                         "new_permission": target_perm.name,
-                        "tools_updated": len(updated),
-                        "tools": updated
+                        "tools_updated": len(permissions_batch),
+                        "tools": list(permissions_batch.keys()),
+                        "saved": True
                     }
                 
                 bulk_action_btn.click(

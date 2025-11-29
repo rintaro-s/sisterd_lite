@@ -157,9 +157,25 @@ class PermissionManager:
         # Unknown: conservative default
         return Permission.AI_ASK
 
-    def set_permission(self, tool_name: str, permission: Permission):
+    def set_permission(self, tool_name: str, permission: Permission, auto_save: bool = True):
+        """Set permission for a single tool."""
         self.permissions[tool_name] = permission
+        if auto_save:
+            self.save()
+
+    def set_permissions_batch(self, permissions_dict: Dict[str, Permission]):
+        """Set multiple permissions at once and save only once."""
+        self.permissions.update(permissions_dict)
         self.save()
 
     def get_all(self) -> Dict[str, str]:
         return {k: v.value for k, v in self.permissions.items()}
+
+    def get_enabled_tools(self) -> list:
+        """Get list of tools that are NOT disabled."""
+        return [name for name, perm in self.permissions.items() if perm != Permission.DISABLED]
+
+    def get_disabled_tools(self) -> list:
+        """Get list of disabled tools."""
+        return [name for name, perm in self.permissions.items() if perm == Permission.DISABLED]
+

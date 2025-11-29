@@ -823,23 +823,46 @@ class MCPHandler:
         params = request_data.get("params") or {}
         msg_id = request_data.get("id")
 
+        # Handle notifications (no id) - return empty response
+        if msg_id is None and normalized.startswith("notifications/"):
+            logger.debug(f"Received notification: {normalized}")
+            return {"jsonrpc": "2.0", "result": {}}
+
         if normalized == "initialize":
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
                 "result": {
+                    "protocolVersion": "2024-11-05",
                     "capabilities": {
-                        "resources": {"subscribe": True, "listChanged": False}
-                    }
+                        "tools": {},
+                        "resources": {"subscribe": True, "listChanged": False},
+                    },
+                    "serverInfo": {
+                        "name": "systerd-lite",
+                        "version": "3.0.0",
+                    },
                 },
             }
 
         if normalized == "tools/list":
+            # Get enabled tools only (respecting permissions)
+            from .permissions import Permission
+            perm_mgr = self.context.permission_manager
+            perm_mgr.load()  # Reload to get fresh state
+            
+            enabled_tools = []
+            for name, tool in self.tools.items():
+                perm = perm_mgr.check(name)
+                if perm != Permission.DISABLED:
+                    enabled_tools.append(tool.to_schema())
+            
+            logger.info(f"tools/list returning {len(enabled_tools)} enabled tools (of {len(self.tools)} total)")
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
                 "result": {
-                    "tools": [t.to_schema() for t in self.tools.values()]
+                    "tools": enabled_tools
                 },
             }
 
@@ -1565,9 +1588,9 @@ class MCPHandler:
     MCP_TEMPLATES = {
         "minimal": {
             "name": "Minimal",
-            "description": "Basic system information only - safe for any environment",
-            "categories": ["monitoring"],
-            "tool_count": 13
+            "description": "Basic system information only - safe for any environment (MCP config tools always enabled)",
+            "categories": ["monitoring", "mcp"],
+            "tool_count": 18
         },
         "monitoring": {
             "name": "Monitoring",
@@ -1591,7 +1614,7 @@ class MCPHandler:
             "name": "Full Access",
             "description": "All tools enabled - requires appropriate permissions",
             "categories": list(MCP_TOOL_CATEGORIES.keys()),
-            "tool_count": 182
+            "tool_count": 187
         }
     }
     
@@ -1698,6 +1721,7 @@ class MCPHandler:
         
         enabled_count = 0
         disabled_count = 0
+        permissions_batch = {}
         
         for tool_name in self.tools:
             # Find tool's category
@@ -1709,11 +1733,14 @@ class MCPHandler:
             
             # Enable if category is in template, disable otherwise
             if tool_category in enabled_categories:
-                perm_mgr.set_permission(tool_name, Permission.AI_AUTO)
+                permissions_batch[tool_name] = Permission.AI_AUTO
                 enabled_count += 1
             else:
-                perm_mgr.set_permission(tool_name, Permission.DISABLED)
+                permissions_batch[tool_name] = Permission.DISABLED
                 disabled_count += 1
+        
+        # Save all permissions at once
+        perm_mgr.set_permissions_batch(permissions_batch)
         
         return {
             "template": template,
@@ -1722,6 +1749,7 @@ class MCPHandler:
             "enabled_categories": enabled_categories,
             "enabled_tools": enabled_count,
             "disabled_tools": disabled_count,
+            "config_file": str(perm_mgr.config_file),
             "success": True
         }
     

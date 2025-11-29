@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "systerd": {
+      "command": "python3",
+      "args": ["/home/rinta/Documents/sisterd_lite/mcp_server_unified.py"]
+    }
+  }
+}
