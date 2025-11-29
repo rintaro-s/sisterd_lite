@@ -153,24 +153,32 @@ class HTTPServer:
         """Execute MCP tool"""
         try:
             data = await request.json()
-            if isinstance(data, dict) and data.get('method'):
-                mcp_response = await self.mcp.process_request(data)
-                return aiohttp.web.json_response(mcp_response)
-            tool_name = data.get('name')
-            arguments = data.get('arguments', {})
-            
-            if not tool_name:
-                return aiohttp.web.json_response(
-                    {'error': 'Missing tool name'},
-                    status=400
-                )
-            
-            result = await self.mcp.call_tool(tool_name, arguments)
-            return aiohttp.web.json_response({'result': result})
+            if not isinstance(data, dict):
+                raise ValueError("MCP request must be a JSON object")
+
+            if 'method' not in data and 'name' in data:
+                data = {
+                    'jsonrpc': '2.0',
+                    'id': data.get('id'),
+                    'method': 'tools/call',
+                    'params': {
+                        'name': data.get('name'),
+                        'arguments': data.get('arguments', {}),
+                    },
+                }
+
+            method = data.get('method')
+            if method:
+                logger.info(f"JSON-RPC request method={method}")
+            mcp_response = await self.mcp.process_request(data)
+            return aiohttp.web.json_response(mcp_response)
         
         except json.JSONDecodeError:
             logger.info("Received non-JSON MCP request")
             return aiohttp.web.json_response({'error': 'Invalid JSON'}, status=400)
+        except ValueError as e:
+            logger.info(f"Invalid MCP request: {e}")
+            return aiohttp.web.json_response({'error': str(e)}, status=400)
         except Exception as e:
             logger.error(f"MCP call error: {e}", exc_info=True)
             return aiohttp.web.json_response(
@@ -544,7 +552,196 @@ def create_gradio_ui(mcp: MCPHandler, neurobus: NeuroBus,
                 )
         
         # ================================================================
-        # TAB 5: MONITORING & EVENTS
+        # TAB 5: MCP TOOL MANAGEMENT
+        # ================================================================
+        with gr.Tab("MCP Settings"):
+            gr.Markdown("## MCP Tool Configuration & Templates")
+            gr.Markdown("Manage which MCP tools are enabled and apply configuration templates to quickly configure tool sets.")
+            
+            with gr.Group():
+                gr.Markdown("### Quick Templates")
+                gr.Markdown("Apply a predefined template to enable/disable tools by category. Useful for VS Code's MCP tool limit.")
+                
+                template_select = gr.Radio(
+                    choices=["minimal", "monitoring", "development", "security", "full"],
+                    label="Select Template",
+                    value="development",
+                    info=("minimal: Basic monitoring only (13 tools) | "
+                          "monitoring: System stats + MCP config (18 tools) | "
+                          "development: Dev focused with containers (35 tools) | "
+                          "security: Security audit tools (31 tools) | "
+                          "full: All 182+ tools enabled")
+                )
+                
+                template_apply_btn = gr.Button("Apply Template", variant="primary")
+                template_result = gr.JSON(label="Template Application Result")
+                
+                async def apply_template(template_name):
+                    try:
+                        result = await mcp.call_tool("apply_mcp_template", {"template": template_name})
+                        return result
+                    except Exception as e:
+                        return {"error": str(e)}
+                
+                template_apply_btn.click(
+                    apply_template,
+                    inputs=[template_select],
+                    outputs=[template_result]
+                )
+            
+            with gr.Group():
+                gr.Markdown("### Current Configuration")
+                
+                config_refresh_btn = gr.Button("Refresh MCP Config")
+                mcp_config_display = gr.JSON(label="Current MCP Configuration")
+                
+                async def get_mcp_config():
+                    try:
+                        return await mcp.call_tool("get_mcp_config", {})
+                    except Exception as e:
+                        return {"error": str(e)}
+                
+                config_refresh_btn.click(get_mcp_config, outputs=[mcp_config_display])
+            
+            with gr.Group():
+                gr.Markdown("### Tool List by Category")
+                
+                category_select = gr.Dropdown(
+                    choices=["all", "monitoring", "security", "system", "network", 
+                             "container", "user", "storage", "scheduler", "tuning", 
+                             "ai", "calculator", "mcp"],
+                    label="Filter by Category",
+                    value="all"
+                )
+                
+                status_filter = gr.Radio(
+                    choices=["all", "enabled", "disabled"],
+                    label="Filter by Status",
+                    value="all"
+                )
+                
+                tools_list_btn = gr.Button("List Tools")
+                tools_list_display = gr.JSON(label="Tools List")
+                
+                async def list_tools(category, status):
+                    try:
+                        args = {"status": status}
+                        if category != "all":
+                            args["category"] = category
+                        return await mcp.call_tool("list_mcp_tools", args)
+                    except Exception as e:
+                        return {"error": str(e)}
+                
+                tools_list_btn.click(
+                    list_tools,
+                    inputs=[category_select, status_filter],
+                    outputs=[tools_list_display]
+                )
+            
+            with gr.Group():
+                gr.Markdown("### Individual Tool Permission")
+                
+                ind_tool_select = gr.Dropdown(
+                    choices=sorted(mcp.tools.keys()),
+                    label="Select Tool",
+                    value="get_uptime"
+                )
+                
+                ind_perm_select = gr.Radio(
+                    choices=["DISABLED", "READ_ONLY", "AI_ASK", "AI_AUTO"],
+                    label="Permission Level",
+                    value="AI_AUTO",
+                    info=("DISABLED: Tool cannot run | "
+                          "READ_ONLY: Read-only operations | "
+                          "AI_ASK: Ask before executing | "
+                          "AI_AUTO: Execute automatically")
+                )
+                
+                ind_perm_btn = gr.Button("Set Tool Permission")
+                ind_perm_result = gr.JSON(label="Result")
+                
+                async def set_individual_permission(tool_name, perm):
+                    try:
+                        return await mcp.call_tool("set_mcp_tool_permission", {
+                            "tool_name": tool_name,
+                            "permission": perm
+                        })
+                    except Exception as e:
+                        return {"error": str(e)}
+                
+                ind_perm_btn.click(
+                    set_individual_permission,
+                    inputs=[ind_tool_select, ind_perm_select],
+                    outputs=[ind_perm_result]
+                )
+            
+            with gr.Group():
+                gr.Markdown("### Bulk Tool Actions")
+                
+                with gr.Row():
+                    bulk_category = gr.Dropdown(
+                        choices=["monitoring", "security", "system", "network", 
+                                 "container", "user", "storage", "scheduler", 
+                                 "tuning", "ai", "calculator", "mcp"],
+                        label="Category to Modify",
+                        value="monitoring"
+                    )
+                    
+                    bulk_action = gr.Radio(
+                        choices=["Enable All", "Disable All"],
+                        label="Action",
+                        value="Enable All"
+                    )
+                
+                bulk_action_btn = gr.Button("Apply Bulk Action")
+                bulk_result = gr.JSON(label="Bulk Action Result")
+                
+                async def bulk_tool_action(category, action):
+                    from systerd_lite.permissions import Permission
+                    
+                    # Get tools in this category
+                    tool_list_result = await mcp.call_tool("list_mcp_tools", {"category": category})
+                    if "error" in tool_list_result:
+                        return tool_list_result
+                    
+                    target_perm = Permission.AI_AUTO if action == "Enable All" else Permission.DISABLED
+                    updated = []
+                    
+                    for tool_info in tool_list_result.get("tools", []):
+                        tool_name = tool_info["name"]
+                        permissions.set_permission(tool_name, target_perm)
+                        updated.append(tool_name)
+                    
+                    return {
+                        "category": category,
+                        "action": action,
+                        "new_permission": target_perm.name,
+                        "tools_updated": len(updated),
+                        "tools": updated
+                    }
+                
+                bulk_action_btn.click(
+                    bulk_tool_action,
+                    inputs=[bulk_category, bulk_action],
+                    outputs=[bulk_result]
+                )
+            
+            with gr.Group():
+                gr.Markdown("### Available Templates")
+                
+                templates_btn = gr.Button("Show Templates")
+                templates_display = gr.JSON(label="Template Definitions")
+                
+                async def show_templates():
+                    try:
+                        return await mcp.call_tool("get_mcp_templates", {})
+                    except Exception as e:
+                        return {"error": str(e)}
+                
+                templates_btn.click(show_templates, outputs=[templates_display])
+        
+        # ================================================================
+        # TAB 6: MONITORING & EVENTS
         # ================================================================
         with gr.Tab("Monitoring"):
             gr.Markdown("## System Event Stream & NeuroBus")
@@ -601,7 +798,7 @@ def create_gradio_ui(mcp: MCPHandler, neurobus: NeuroBus,
                 stats_btn.click(get_stats, outputs=[stats_display])
         
         # ================================================================
-        # TAB 6: CONFIGURATION
+        # TAB 7: CONFIGURATION
         # ================================================================
         with gr.Tab("Configuration"):
             gr.Markdown("## Server Configuration & Settings")
@@ -745,7 +942,7 @@ def create_gradio_ui(mcp: MCPHandler, neurobus: NeuroBus,
                 )
         
         # ================================================================
-        # TAB 7: EXAMPLES & DOCUMENTATION
+        # TAB 8: EXAMPLES & DOCUMENTATION
         # ================================================================
         with gr.Tab("Examples"):
             gr.Markdown("## MCP Tool Usage Examples")
