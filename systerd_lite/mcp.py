@@ -701,6 +701,153 @@ class MCPHandler:
             {"type": "object"}
         )
         
+        # ===== LLM SELF-MODIFICATION TOOLS (12 tools) =====
+        # These tools allow the LLM to interact with its own runtime environment
+        self.register_tool(
+            "read_workspace_file",
+            "Read content from a file in the workspace. LLM can read its own code and configs.",
+            self.tool_read_workspace_file,
+            {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path from workspace root"},
+                    "start_line": {"type": "integer", "description": "Start line number (1-indexed, optional)"},
+                    "end_line": {"type": "integer", "description": "End line number (1-indexed, optional)"}
+                },
+                "required": ["path"]
+            }
+        )
+        self.register_tool(
+            "write_workspace_file",
+            "Write content to a file in the workspace. LLM can modify its own code and configs.",
+            self.tool_write_workspace_file,
+            {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path from workspace root"},
+                    "content": {"type": "string", "description": "Content to write"},
+                    "create_dirs": {"type": "boolean", "description": "Create parent directories if needed", "default": True}
+                },
+                "required": ["path", "content"]
+            }
+        )
+        self.register_tool(
+            "append_to_file",
+            "Append content to an existing file in the workspace.",
+            self.tool_append_to_file,
+            {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path from workspace root"},
+                    "content": {"type": "string", "description": "Content to append"}
+                },
+                "required": ["path", "content"]
+            }
+        )
+        self.register_tool(
+            "list_workspace_directory",
+            "List files and directories in the workspace.",
+            self.tool_list_workspace_directory,
+            {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path from workspace root", "default": "."},
+                    "recursive": {"type": "boolean", "description": "List recursively", "default": False},
+                    "include_hidden": {"type": "boolean", "description": "Include hidden files", "default": False}
+                }
+            }
+        )
+        self.register_tool(
+            "search_workspace",
+            "Search for files or content in the workspace using grep-like patterns.",
+            self.tool_search_workspace,
+            {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Search pattern (regex supported)"},
+                    "file_pattern": {"type": "string", "description": "File glob pattern (e.g., '*.py')", "default": "*"},
+                    "search_content": {"type": "boolean", "description": "Search in file content", "default": True}
+                },
+                "required": ["pattern"]
+            }
+        )
+        self.register_tool(
+            "execute_shell_command",
+            "Execute a shell command in the workspace. LLM can run arbitrary commands.",
+            self.tool_execute_shell_command,
+            {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Shell command to execute"},
+                    "cwd": {"type": "string", "description": "Working directory (relative to workspace)"},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 30}
+                },
+                "required": ["command"]
+            }
+        )
+        self.register_tool(
+            "install_python_package",
+            "Install Python packages using pip. LLM can add dependencies.",
+            self.tool_install_python_package,
+            {
+                "type": "object",
+                "properties": {
+                    "packages": {"type": "array", "items": {"type": "string"}, "description": "List of packages to install"},
+                    "upgrade": {"type": "boolean", "description": "Upgrade if already installed", "default": False}
+                },
+                "required": ["packages"]
+            }
+        )
+        self.register_tool(
+            "get_python_environment",
+            "Get information about the Python environment (packages, version, venv).",
+            self.tool_get_python_environment,
+            {"type": "object"}
+        )
+        self.register_tool(
+            "set_environment_variable",
+            "Set or modify an environment variable for the current session.",
+            self.tool_set_environment_variable,
+            {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Variable name"},
+                    "value": {"type": "string", "description": "Variable value"},
+                    "persist": {"type": "boolean", "description": "Persist to .env file", "default": False}
+                },
+                "required": ["name", "value"]
+            }
+        )
+        self.register_tool(
+            "restart_self",
+            "Restart the systerd-lite server. LLM can reload its own runtime.",
+            self.tool_restart_self,
+            {
+                "type": "object",
+                "properties": {
+                    "delay": {"type": "integer", "description": "Delay in seconds before restart", "default": 2}
+                }
+            }
+        )
+        self.register_tool(
+            "get_self_status",
+            "Get status of the systerd-lite server itself (memory, uptime, config).",
+            self.tool_get_self_status,
+            {"type": "object"}
+        )
+        self.register_tool(
+            "backup_workspace",
+            "Create a backup of workspace files or the entire workspace.",
+            self.tool_backup_workspace,
+            {
+                "type": "object",
+                "properties": {
+                    "paths": {"type": "array", "items": {"type": "string"}, "description": "Specific files/dirs to backup (relative paths)"},
+                    "backup_name": {"type": "string", "description": "Backup archive name"}
+                }
+            }
+        )
+        
         # Register 100+ extended tools
         logger.info("Registering extended tools (100+ system management tools)")
         self.extended.register_all(self)
@@ -1582,6 +1729,12 @@ class MCPHandler:
         "mcp": [
             "get_mcp_config", "list_mcp_tools", "set_mcp_tool_permission",
             "apply_mcp_template", "get_mcp_templates"
+        ],
+        "self": [
+            "read_workspace_file", "write_workspace_file", "append_to_file",
+            "list_workspace_directory", "search_workspace", "execute_shell_command",
+            "install_python_package", "get_python_environment", "set_environment_variable",
+            "restart_self", "get_self_status", "backup_workspace"
         ]
     }
     
@@ -1600,9 +1753,9 @@ class MCPHandler:
         },
         "development": {
             "name": "Development",
-            "description": "Development focused - monitoring, containers, and basic system tools",
-            "categories": ["monitoring", "container", "calculator", "mcp"],
-            "tool_count": 35
+            "description": "Development focused - monitoring, containers, calculator, and self-modification tools",
+            "categories": ["monitoring", "container", "calculator", "mcp", "self"],
+            "tool_count": 47
         },
         "security": {
             "name": "Security Audit",
@@ -1723,21 +1876,29 @@ class MCPHandler:
         disabled_count = 0
         permissions_batch = {}
         
+        # Special case: "full" template enables ALL tools
+        is_full_template = (template == "full")
+        
         for tool_name in self.tools:
-            # Find tool's category
-            tool_category = None
-            for cat, cat_tools in self.MCP_TOOL_CATEGORIES.items():
-                if tool_name in cat_tools:
-                    tool_category = cat
-                    break
-            
-            # Enable if category is in template, disable otherwise
-            if tool_category in enabled_categories:
+            if is_full_template:
+                # Full template: enable everything
                 permissions_batch[tool_name] = Permission.AI_AUTO
                 enabled_count += 1
             else:
-                permissions_batch[tool_name] = Permission.DISABLED
-                disabled_count += 1
+                # Find tool's category
+                tool_category = None
+                for cat, cat_tools in self.MCP_TOOL_CATEGORIES.items():
+                    if tool_name in cat_tools:
+                        tool_category = cat
+                        break
+                
+                # Enable if category is in template, disable otherwise
+                if tool_category in enabled_categories:
+                    permissions_batch[tool_name] = Permission.AI_AUTO
+                    enabled_count += 1
+                else:
+                    permissions_batch[tool_name] = Permission.DISABLED
+                    disabled_count += 1
         
         # Save all permissions at once
         perm_mgr.set_permissions_batch(permissions_batch)
@@ -1746,7 +1907,7 @@ class MCPHandler:
             "template": template,
             "name": template_info["name"],
             "description": template_info["description"],
-            "enabled_categories": enabled_categories,
+            "enabled_categories": enabled_categories if not is_full_template else ["all"],
             "enabled_tools": enabled_count,
             "disabled_tools": disabled_count,
             "config_file": str(perm_mgr.config_file),
@@ -1765,3 +1926,424 @@ class MCPHandler:
                 "estimated_tool_count": info["tool_count"]
             })
         return {"templates": templates}
+
+    # ===== LLM SELF-MODIFICATION TOOL IMPLEMENTATIONS =====
+    
+    async def tool_read_workspace_file(self, path: str, start_line: int = None, end_line: int = None) -> Dict[str, Any]:
+        """Read content from a file in the workspace."""
+        target = self.workspace_root / path
+        if not target.exists():
+            raise MCPError(f"File not found: {path}", code=ErrorCode.RESOURCE_NOT_FOUND)
+        
+        # Security check: must be within workspace
+        try:
+            target = target.resolve()
+            if self.workspace_root.resolve() not in target.parents and target != self.workspace_root.resolve():
+                raise MCPError("Access denied: path outside workspace", code=ErrorCode.PERMISSION_DENIED)
+        except Exception as e:
+            raise MCPError(f"Invalid path: {e}", code=ErrorCode.INVALID_PARAMETERS)
+        
+        try:
+            content = target.read_text(encoding='utf-8', errors='replace')
+            lines = content.splitlines(keepends=True)
+            total_lines = len(lines)
+            
+            if start_line is not None or end_line is not None:
+                start = (start_line or 1) - 1
+                end = end_line or total_lines
+                lines = lines[start:end]
+                content = ''.join(lines)
+            
+            return {
+                "path": str(target.relative_to(self.workspace_root)),
+                "content": content,
+                "total_lines": total_lines,
+                "read_lines": len(lines),
+                "size_bytes": target.stat().st_size
+            }
+        except Exception as e:
+            raise MCPError(f"Failed to read file: {e}", code=ErrorCode.INTERNAL_ERROR)
+    
+    async def tool_write_workspace_file(self, path: str, content: str, create_dirs: bool = True) -> Dict[str, Any]:
+        """Write content to a file in the workspace."""
+        target = self.workspace_root / path
+        
+        # Security check
+        try:
+            target_resolved = (self.workspace_root / path).resolve()
+            if self.workspace_root.resolve() not in target_resolved.parents and target_resolved != self.workspace_root.resolve():
+                raise MCPError("Access denied: path outside workspace", code=ErrorCode.PERMISSION_DENIED)
+        except Exception as e:
+            raise MCPError(f"Invalid path: {e}", code=ErrorCode.INVALID_PARAMETERS)
+        
+        try:
+            if create_dirs:
+                target.parent.mkdir(parents=True, exist_ok=True)
+            
+            existed = target.exists()
+            old_size = target.stat().st_size if existed else 0
+            
+            target.write_text(content, encoding='utf-8')
+            
+            return {
+                "path": str(target.relative_to(self.workspace_root)),
+                "created": not existed,
+                "old_size": old_size,
+                "new_size": target.stat().st_size,
+                "lines_written": len(content.splitlines())
+            }
+        except Exception as e:
+            raise MCPError(f"Failed to write file: {e}", code=ErrorCode.INTERNAL_ERROR)
+    
+    async def tool_append_to_file(self, path: str, content: str) -> Dict[str, Any]:
+        """Append content to an existing file."""
+        target = self.workspace_root / path
+        
+        try:
+            target_resolved = target.resolve()
+            if self.workspace_root.resolve() not in target_resolved.parents:
+                raise MCPError("Access denied: path outside workspace", code=ErrorCode.PERMISSION_DENIED)
+        except Exception as e:
+            raise MCPError(f"Invalid path: {e}", code=ErrorCode.INVALID_PARAMETERS)
+        
+        try:
+            with open(target, 'a', encoding='utf-8') as f:
+                f.write(content)
+            
+            return {
+                "path": str(target.relative_to(self.workspace_root)),
+                "appended_bytes": len(content.encode('utf-8')),
+                "total_size": target.stat().st_size
+            }
+        except Exception as e:
+            raise MCPError(f"Failed to append to file: {e}", code=ErrorCode.INTERNAL_ERROR)
+    
+    async def tool_list_workspace_directory(self, path: str = ".", recursive: bool = False, include_hidden: bool = False) -> Dict[str, Any]:
+        """List files and directories in the workspace."""
+        target = self.workspace_root / path
+        
+        if not target.exists():
+            raise MCPError(f"Directory not found: {path}", code=ErrorCode.RESOURCE_NOT_FOUND)
+        
+        if not target.is_dir():
+            raise MCPError(f"Not a directory: {path}", code=ErrorCode.INVALID_PARAMETERS)
+        
+        try:
+            entries = []
+            if recursive:
+                for item in target.rglob('*'):
+                    if not include_hidden and any(p.startswith('.') for p in item.relative_to(target).parts):
+                        continue
+                    try:
+                        stat = item.stat()
+                        entries.append({
+                            "path": str(item.relative_to(self.workspace_root)),
+                            "type": "directory" if item.is_dir() else "file",
+                            "size": stat.st_size if item.is_file() else None,
+                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                        })
+                    except (PermissionError, FileNotFoundError):
+                        continue
+            else:
+                for item in target.iterdir():
+                    if not include_hidden and item.name.startswith('.'):
+                        continue
+                    try:
+                        stat = item.stat()
+                        entries.append({
+                            "path": str(item.relative_to(self.workspace_root)),
+                            "type": "directory" if item.is_dir() else "file",
+                            "size": stat.st_size if item.is_file() else None,
+                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                        })
+                    except (PermissionError, FileNotFoundError):
+                        continue
+            
+            # Sort: directories first, then by name
+            entries.sort(key=lambda x: (x['type'] != 'directory', x['path']))
+            
+            return {
+                "directory": str(target.relative_to(self.workspace_root)) if target != self.workspace_root else ".",
+                "entries": entries,
+                "total_count": len(entries)
+            }
+        except Exception as e:
+            raise MCPError(f"Failed to list directory: {e}", code=ErrorCode.INTERNAL_ERROR)
+    
+    async def tool_search_workspace(self, pattern: str, file_pattern: str = "*", search_content: bool = True) -> Dict[str, Any]:
+        """Search for files or content in the workspace."""
+        import re
+        
+        try:
+            regex = re.compile(pattern, re.IGNORECASE)
+        except re.error as e:
+            raise MCPError(f"Invalid regex pattern: {e}", code=ErrorCode.INVALID_PARAMETERS)
+        
+        results = []
+        files_searched = 0
+        
+        for file_path in self.workspace_root.rglob(file_pattern):
+            if not file_path.is_file():
+                continue
+            if any(p.startswith('.') for p in file_path.relative_to(self.workspace_root).parts):
+                continue
+            
+            files_searched += 1
+            rel_path = str(file_path.relative_to(self.workspace_root))
+            
+            # Check filename match
+            if regex.search(file_path.name):
+                results.append({
+                    "path": rel_path,
+                    "match_type": "filename",
+                    "line": None,
+                    "context": None
+                })
+            
+            # Check content match
+            if search_content:
+                try:
+                    content = file_path.read_text(encoding='utf-8', errors='ignore')
+                    for i, line in enumerate(content.splitlines(), 1):
+                        if regex.search(line):
+                            results.append({
+                                "path": rel_path,
+                                "match_type": "content",
+                                "line": i,
+                                "context": line.strip()[:200]
+                            })
+                            if len(results) > 100:  # Limit results
+                                break
+                except (UnicodeDecodeError, PermissionError):
+                    continue
+            
+            if len(results) > 100:
+                break
+        
+        return {
+            "pattern": pattern,
+            "file_pattern": file_pattern,
+            "files_searched": files_searched,
+            "matches": results,
+            "total_matches": len(results),
+            "truncated": len(results) > 100
+        }
+    
+    async def tool_execute_shell_command(self, command: str, cwd: str = None, timeout: int = 30) -> Dict[str, Any]:
+        """Execute a shell command in the workspace."""
+        work_dir = self.workspace_root
+        if cwd:
+            work_dir = self.workspace_root / cwd
+            if not work_dir.exists():
+                raise MCPError(f"Directory not found: {cwd}", code=ErrorCode.RESOURCE_NOT_FOUND)
+        
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                cwd=str(work_dir),
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            
+            return {
+                "command": command,
+                "cwd": str(work_dir.relative_to(self.workspace_root)) if work_dir != self.workspace_root else ".",
+                "exit_code": result.returncode,
+                "stdout": result.stdout[:10000] if result.stdout else "",
+                "stderr": result.stderr[:5000] if result.stderr else "",
+                "success": result.returncode == 0
+            }
+        except subprocess.TimeoutExpired:
+            raise MCPError(f"Command timed out after {timeout}s", code=ErrorCode.TIMEOUT)
+        except Exception as e:
+            raise MCPError(f"Failed to execute command: {e}", code=ErrorCode.INTERNAL_ERROR)
+    
+    async def tool_install_python_package(self, packages: List[str], upgrade: bool = False) -> Dict[str, Any]:
+        """Install Python packages using pip."""
+        venv_pip = self.workspace_root / '.venv' / 'bin' / 'pip'
+        pip_cmd = str(venv_pip) if venv_pip.exists() else 'pip3'
+        
+        args = [pip_cmd, 'install']
+        if upgrade:
+            args.append('--upgrade')
+        args.extend(packages)
+        
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            return {
+                "packages": packages,
+                "command": ' '.join(args),
+                "exit_code": result.returncode,
+                "stdout": result.stdout[-5000:] if result.stdout else "",
+                "stderr": result.stderr[-2000:] if result.stderr else "",
+                "success": result.returncode == 0
+            }
+        except subprocess.TimeoutExpired:
+            raise MCPError("Package installation timed out", code=ErrorCode.TIMEOUT)
+        except Exception as e:
+            raise MCPError(f"Failed to install packages: {e}", code=ErrorCode.INTERNAL_ERROR)
+    
+    async def tool_get_python_environment(self) -> Dict[str, Any]:
+        """Get information about the Python environment."""
+        import sys
+        
+        venv_path = self.workspace_root / '.venv'
+        is_venv = venv_path.exists()
+        
+        # Get installed packages
+        try:
+            result = subprocess.run(
+                [sys.executable, '-m', 'pip', 'list', '--format=json'],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            packages = json.loads(result.stdout) if result.returncode == 0 else []
+        except Exception:
+            packages = []
+        
+        return {
+            "python_version": sys.version,
+            "python_executable": sys.executable,
+            "is_virtual_env": is_venv,
+            "venv_path": str(venv_path) if is_venv else None,
+            "packages": packages,
+            "package_count": len(packages),
+            "platform": sys.platform
+        }
+    
+    async def tool_set_environment_variable(self, name: str, value: str, persist: bool = False) -> Dict[str, Any]:
+        """Set or modify an environment variable."""
+        old_value = os.environ.get(name)
+        os.environ[name] = value
+        
+        result = {
+            "name": name,
+            "old_value": old_value,
+            "new_value": value,
+            "persisted": False
+        }
+        
+        if persist:
+            env_file = self.workspace_root / '.env'
+            try:
+                lines = []
+                if env_file.exists():
+                    lines = env_file.read_text().splitlines()
+                
+                # Update or add the variable
+                found = False
+                for i, line in enumerate(lines):
+                    if line.startswith(f'{name}='):
+                        lines[i] = f'{name}={value}'
+                        found = True
+                        break
+                
+                if not found:
+                    lines.append(f'{name}={value}')
+                
+                env_file.write_text('\n'.join(lines) + '\n')
+                result["persisted"] = True
+                result["env_file"] = str(env_file)
+            except Exception as e:
+                result["persist_error"] = str(e)
+        
+        return result
+    
+    async def tool_restart_self(self, delay: int = 2) -> Dict[str, Any]:
+        """Restart the systerd-lite server."""
+        import asyncio
+        
+        async def delayed_restart():
+            await asyncio.sleep(delay)
+            # Find and restart the process
+            pid_file = Path('/tmp/systerd-lite.pid')
+            if pid_file.exists():
+                try:
+                    old_pid = int(pid_file.read_text().strip())
+                    os.kill(old_pid, 15)  # SIGTERM
+                except Exception:
+                    pass
+            
+            # Start new instance
+            start_script = self.workspace_root / 'start-mcp.sh'
+            if start_script.exists():
+                subprocess.Popen(
+                    [str(start_script)],
+                    cwd=str(self.workspace_root),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True
+                )
+        
+        asyncio.create_task(delayed_restart())
+        
+        return {
+            "status": "restart_scheduled",
+            "delay_seconds": delay,
+            "message": f"Server will restart in {delay} seconds"
+        }
+    
+    async def tool_get_self_status(self) -> Dict[str, Any]:
+        """Get status of the systerd-lite server itself."""
+        import sys
+        process = psutil.Process()
+        
+        return {
+            "pid": process.pid,
+            "status": process.status(),
+            "memory_mb": process.memory_info().rss / 1024 / 1024,
+            "cpu_percent": process.cpu_percent(),
+            "num_threads": process.num_threads(),
+            "create_time": datetime.fromtimestamp(process.create_time()).isoformat(),
+            "uptime_seconds": (datetime.now() - datetime.fromtimestamp(process.create_time())).total_seconds(),
+            "python_version": sys.version,
+            "working_directory": str(self.workspace_root),
+            "tool_count": len(self.tools),
+            "mode": self.context.mode.value if hasattr(self.context, 'mode') else "unknown"
+        }
+    
+    async def tool_backup_workspace(self, paths: List[str] = None, backup_name: str = None) -> Dict[str, Any]:
+        """Create a backup of workspace files."""
+        import tarfile
+        from datetime import datetime
+        
+        backup_dir = self.workspace_root / '.backups'
+        backup_dir.mkdir(exist_ok=True)
+        
+        if not backup_name:
+            backup_name = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        backup_path = backup_dir / f"{backup_name}.tar.gz"
+        
+        try:
+            with tarfile.open(backup_path, 'w:gz') as tar:
+                if paths:
+                    for path in paths:
+                        target = self.workspace_root / path
+                        if target.exists():
+                            tar.add(target, arcname=path)
+                else:
+                    # Backup entire workspace except .venv and .backups
+                    for item in self.workspace_root.iterdir():
+                        if item.name not in ['.venv', '.backups', '__pycache__', '.git']:
+                            tar.add(item, arcname=item.name)
+            
+            return {
+                "backup_path": str(backup_path),
+                "backup_name": backup_name,
+                "size_bytes": backup_path.stat().st_size,
+                "paths_included": paths or ["(entire workspace)"],
+                "success": True
+            }
+        except Exception as e:
+            raise MCPError(f"Failed to create backup: {e}", code=ErrorCode.INTERNAL_ERROR)
+

@@ -1,12 +1,14 @@
 import gradio as gr
 import json
 import time
+import asyncio
 from pathlib import Path
 from datetime import datetime
 
 from ..calculator import Calculator
 from ..scheduler import Scheduler
 from ..systemd_native import SystemdNative
+from ..permissions import PermissionManager, Permission
 
 def launch_gradio_ui(context, port=7860):
     """Launch the Gradio UI for Systerd Lite."""
@@ -15,6 +17,7 @@ def launch_gradio_ui(context, port=7860):
     calc = Calculator()
     scheduler = Scheduler(context.state_dir)
     sysd = SystemdNative(state_dir=str(context.state_dir))
+    perm_mgr = context.permission_manager
     
     def run_calculator(expression):
         try:
@@ -46,7 +49,6 @@ def launch_gradio_ui(context, port=7860):
     def list_units_ui():
         try:
             # Trigger reload to scan units
-            import asyncio
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             reload_res = loop.run_until_complete(sysd.daemon_reload())
@@ -58,6 +60,110 @@ def launch_gradio_ui(context, port=7860):
                 "units_sample": list(units.keys())[:20]
             }
             return json.dumps(summary, indent=2)
+        except Exception as e:
+            return json.dumps({"error": str(e)}, indent=2)
+    
+    # ===== MCP Settings Functions =====
+    def get_mcp_status():
+        """Get current MCP tool status."""
+        try:
+            perm_mgr.load()
+            all_tools = list(context.mcp.tools.keys()) if hasattr(context, 'mcp') else []
+            
+            enabled = []
+            disabled = []
+            
+            for tool in all_tools:
+                perm = perm_mgr.check(tool)
+                if perm != Permission.DISABLED:
+                    enabled.append({"name": tool, "permission": perm.name})
+                else:
+                    disabled.append(tool)
+            
+            return json.dumps({
+                "total_tools": len(all_tools),
+                "enabled_count": len(enabled),
+                "disabled_count": len(disabled),
+                "enabled_tools": enabled[:50],
+                "config_file": str(perm_mgr.config_file)
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({"error": str(e)}, indent=2)
+    
+    def apply_template(template_name):
+        """Apply a permission template."""
+        try:
+            if not hasattr(context, 'mcp'):
+                return json.dumps({"error": "MCP handler not available"}, indent=2)
+            
+            mcp = context.mcp
+            
+            # Run async function
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(mcp.tool_apply_mcp_template(template_name))
+            loop.close()
+            
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return json.dumps({"error": str(e)}, indent=2)
+    
+    def set_tool_permission(tool_name, permission):
+        """Set permission for a specific tool."""
+        try:
+            perm_level = Permission[permission]
+            perm_mgr.set_permission(tool_name, perm_level)
+            return json.dumps({
+                "tool": tool_name,
+                "permission": permission,
+                "success": True
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({"error": str(e)}, indent=2)
+    
+    def enable_all_tools():
+        """Enable all tools with AI_AUTO permission."""
+        try:
+            if not hasattr(context, 'mcp'):
+                return json.dumps({"error": "MCP handler not available"}, indent=2)
+            
+            all_tools = list(context.mcp.tools.keys())
+            permissions_batch = {tool: Permission.AI_AUTO for tool in all_tools}
+            perm_mgr.set_permissions_batch(permissions_batch)
+            
+            return json.dumps({
+                "action": "enable_all",
+                "tools_enabled": len(all_tools),
+                "success": True
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({"error": str(e)}, indent=2)
+    
+    def disable_all_tools():
+        """Disable all tools except MCP config tools."""
+        try:
+            if not hasattr(context, 'mcp'):
+                return json.dumps({"error": "MCP handler not available"}, indent=2)
+            
+            mcp_tools = ["get_mcp_config", "list_mcp_tools", "set_mcp_tool_permission", 
+                        "apply_mcp_template", "get_mcp_templates"]
+            all_tools = list(context.mcp.tools.keys())
+            
+            permissions_batch = {}
+            for tool in all_tools:
+                if tool in mcp_tools:
+                    permissions_batch[tool] = Permission.AI_AUTO
+                else:
+                    permissions_batch[tool] = Permission.DISABLED
+            
+            perm_mgr.set_permissions_batch(permissions_batch)
+            
+            return json.dumps({
+                "action": "disable_all",
+                "tools_disabled": len(all_tools) - len(mcp_tools),
+                "mcp_tools_kept": mcp_tools,
+                "success": True
+            }, indent=2)
         except Exception as e:
             return json.dumps({"error": str(e)}, indent=2)
 
@@ -101,6 +207,52 @@ def launch_gradio_ui(context, port=7860):
     with gr.Blocks(title="Systerd Lite Control Panel", theme=gr.themes.Soft()) as demo:
         gr.Markdown("# 🎛️ Systerd Lite Control Panel")
         gr.Markdown("Manage system functions, calculations, and scheduling.")
+        
+        with gr.Tab("🔧 MCP Settings"):
+            gr.Markdown("### MCP Tool Configuration")
+            gr.Markdown("Manage which tools are available to LLM clients.")
+            
+            with gr.Row():
+                with gr.Column(scale=2):
+                    status_btn = gr.Button("🔄 Refresh Status", variant="secondary")
+                    mcp_status = gr.Code(label="Current Status", language="json")
+                
+                with gr.Column(scale=1):
+                    gr.Markdown("#### Quick Actions")
+                    enable_all_btn = gr.Button("✅ Enable All Tools", variant="primary")
+                    disable_all_btn = gr.Button("❌ Disable All (Keep MCP)", variant="stop")
+                    quick_result = gr.Code(label="Result", language="json", lines=5)
+            
+            gr.Markdown("---")
+            gr.Markdown("#### Apply Template")
+            with gr.Row():
+                template_dropdown = gr.Dropdown(
+                    label="Template",
+                    choices=["minimal", "monitoring", "development", "security", "full"],
+                    value="full",
+                    info="Select a preset configuration"
+                )
+                apply_btn = gr.Button("Apply Template", variant="primary")
+            template_result = gr.Code(label="Template Result", language="json")
+            
+            gr.Markdown("---")
+            gr.Markdown("#### Individual Tool Permission")
+            with gr.Row():
+                tool_input = gr.Textbox(label="Tool Name", placeholder="e.g., get_system_info")
+                perm_dropdown = gr.Dropdown(
+                    label="Permission",
+                    choices=["DISABLED", "READ_ONLY", "AI_ASK", "AI_AUTO"],
+                    value="AI_AUTO"
+                )
+                set_perm_btn = gr.Button("Set Permission")
+            perm_result = gr.Code(label="Permission Result", language="json", lines=3)
+            
+            # Event handlers
+            status_btn.click(get_mcp_status, inputs=[], outputs=[mcp_status])
+            enable_all_btn.click(enable_all_tools, inputs=[], outputs=[quick_result])
+            disable_all_btn.click(disable_all_tools, inputs=[], outputs=[quick_result])
+            apply_btn.click(apply_template, inputs=[template_dropdown], outputs=[template_result])
+            set_perm_btn.click(set_tool_permission, inputs=[tool_input, perm_dropdown], outputs=[perm_result])
         
         with gr.Tab("🧮 Calculator"):
             gr.Markdown("### Advanced Calculator")
