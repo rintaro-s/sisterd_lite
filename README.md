@@ -314,16 +314,6 @@ sisterd_lite/
 
 ---
 
-## 📜 ライセンス
-
-MIT License - 詳細は [LICENSE](LICENSE) を参照
-
----
-
-## 🤝 貢献
-
-Issue や Pull Request を歓迎します。大きな変更の場合は先に Issue で議論してください。
-
 ---
 
 # systerd-lite (English)
@@ -641,13 +631,3 @@ sisterd_lite/
 - Protect HTTP API with firewall as needed
 
 ---
-
-## 📜 License
-
-MIT License - See [LICENSE](LICENSE) for details
-
----
-
-## 🤝 Contributing
-
-Issues and Pull Requests are welcome. For major changes, please discuss in an Issue first.
