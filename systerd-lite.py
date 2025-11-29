@@ -134,20 +134,28 @@ class HTTPServer:
     
     async def handle_health(self, request) -> aiohttp.web.Response:
         """Health check"""
-        return aiohttp.web.json_response({
-            'status': 'healthy',
-            'version': '3.0-complete',
-            'tools': len(self.mcp.tools),
-            'mode': self.mode_controller.mode.value
-        })
+        try:
+            return aiohttp.web.json_response({
+                'status': 'healthy',
+                'version': '3.0-complete',
+                'tools': len(self.mcp.tools),
+                'mode': self.mode_controller.mode.value
+            })
+        except Exception as e:
+            logger.exception(f"Health check error: {e}")
+            return aiohttp.web.json_response({'status': 'error', 'error': str(e)}, status=500)
     
     async def handle_mcp_tools(self, request) -> aiohttp.web.Response:
         """List all MCP tools"""
-        tools = sorted(self.mcp.tools.keys())
-        return aiohttp.web.json_response({
-            'tools': tools,
-            'count': len(tools)
-        })
+        try:
+            tools = sorted(self.mcp.tools.keys())
+            return aiohttp.web.json_response({
+                'tools': tools,
+                'count': len(tools)
+            })
+        except Exception as e:
+            logger.exception(f"MCP tools list error: {e}")
+            return aiohttp.web.json_response({'error': str(e)}, status=500)
     
     async def handle_mcp_call(self, request) -> aiohttp.web.Response:
         """Execute MCP tool"""
@@ -174,17 +182,26 @@ class HTTPServer:
             return aiohttp.web.json_response(mcp_response)
         
         except json.JSONDecodeError:
-            logger.info("Received non-JSON MCP request")
-            return aiohttp.web.json_response({'error': 'Invalid JSON'}, status=400)
+            logger.debug("Received non-JSON MCP request")
+            return aiohttp.web.json_response({
+                'jsonrpc': '2.0',
+                'id': None,
+                'error': {'code': -32700, 'message': 'Parse error'}
+            }, status=200)
         except ValueError as e:
-            logger.info(f"Invalid MCP request: {e}")
-            return aiohttp.web.json_response({'error': str(e)}, status=400)
+            logger.debug(f"Invalid MCP request: {e}")
+            return aiohttp.web.json_response({
+                'jsonrpc': '2.0',
+                'id': None,
+                'error': {'code': -32600, 'message': str(e)}
+            }, status=200)
         except Exception as e:
-            logger.error(f"MCP call error: {e}", exc_info=True)
-            return aiohttp.web.json_response(
-                {'error': str(e)},
-                status=500
-            )
+            logger.exception(f"MCP call error: {e}")
+            return aiohttp.web.json_response({
+                'jsonrpc': '2.0',
+                'id': None,
+                'error': {'code': -32603, 'message': str(e)}
+            }, status=200)
     
     async def handle_neurobus(self, request) -> aiohttp.web.Response:
         """Query NeuroBus events"""
@@ -200,40 +217,45 @@ class HTTPServer:
         POST at `/` (forwarded to the MCP call handler) and respond to GET
         with the same payload as `/health`.
         """
-        if request.method == 'GET':
-            return await self.handle_health(request)
-
-        # For POST, attempt to read the body and handle a few common
-        # compatibility cases. Log the incoming request payload for debugging.
         try:
-            raw = await request.text()
-        except Exception:
-            raw = ''
+            if request.method == 'GET':
+                return await self.handle_health(request)
 
-        log_payload = raw.strip()
-        if log_payload:
-            logger.info(f"POST / payload: {log_payload}")
-        else:
-            logger.info("POST / received empty body")
+            # For POST, attempt to read the body and handle a few common
+            # compatibility cases. Log the incoming request payload for debugging.
+            try:
+                raw = await request.text()
+            except Exception:
+                raw = ''
 
-        # Try to parse JSON and detect JSON-RPC 'initialize' (VS Code expects this)
-        try:
-            payload = json.loads(raw) if raw else {}
-        except Exception:
-            payload = None
+            log_payload = raw.strip()
+            if log_payload:
+                logger.debug(f"POST / payload: {log_payload[:200]}")
 
-        if isinstance(payload, dict) and ('method' in payload or 'name' in payload):
-            class _FakeReq:
-                def __init__(self, payload):
-                    self._payload = payload
-                async def json(self):
-                    return self._payload
-            return await self.handle_mcp_call(_FakeReq(payload))
+            # Try to parse JSON and detect JSON-RPC 'initialize' (VS Code expects this)
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception:
+                payload = None
 
-        return aiohttp.web.json_response(
-            {'error': 'Unsupported request on /'},
-            status=400
-        )
+            if isinstance(payload, dict) and ('method' in payload or 'name' in payload):
+                class _FakeReq:
+                    def __init__(self, payload):
+                        self._payload = payload
+                    async def json(self):
+                        return self._payload
+                return await self.handle_mcp_call(_FakeReq(payload))
+
+            return aiohttp.web.json_response(
+                {'error': 'Unsupported request on /'},
+                status=400
+            )
+        except Exception as e:
+            logger.exception(f"Error in handle_root: {e}")
+            return aiohttp.web.json_response(
+                {'error': str(e)},
+                status=500
+            )
     
     async def handle_mode_get(self, request) -> aiohttp.web.Response:
         """Get current mode"""
@@ -1328,6 +1350,8 @@ class SysterdLite:
         except asyncio.CancelledError:
             logger.info("Shutting down gracefully...")
             self.mcp.scheduler.stop_scheduler()
+        except Exception as e:
+            logger.exception(f"Unexpected error in run_forever: {e}")
 
 # ============================================================================
 # CLI
@@ -1366,14 +1390,18 @@ Examples:
     # Create state directory
     args.state_dir.mkdir(exist_ok=True)
     
-    # Create application
-    app = SysterdLite(
-        state_dir=args.state_dir,
-        http_port=args.port,
-        gradio_port=args.gradio,
-        enable_ui=(args.gradio is not None or GRADIO_AVAILABLE) and not args.no_ui,
-        debug=args.debug
-    )
+    try:
+        # Create application
+        app = SysterdLite(
+            state_dir=args.state_dir,
+            http_port=args.port,
+            gradio_port=args.gradio,
+            enable_ui=(args.gradio is not None or GRADIO_AVAILABLE) and not args.no_ui,
+            debug=args.debug
+        )
+    except Exception as e:
+        logger.exception(f"Failed to initialize application: {e}")
+        sys.exit(1)
     
     # Setup signal handlers
     loop = asyncio.new_event_loop()
@@ -1388,14 +1416,23 @@ Examples:
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    # Run
-    try:
-        loop.run_until_complete(app.start())
-        loop.run_until_complete(app.run_forever())
-    except KeyboardInterrupt:
-        logger.info("Interrupted by user")
-    finally:
-        loop.close()
+    # Run with restart on crash
+    while True:
+        try:
+            loop.run_until_complete(app.start())
+            loop.run_until_complete(app.run_forever())
+            break  # Normal exit
+        except KeyboardInterrupt:
+            logger.info("Interrupted by user")
+            break
+        except Exception as e:
+            logger.exception(f"Server crashed: {e}")
+            logger.info("Restarting in 5 seconds...")
+            import time
+            time.sleep(5)
+            continue
+    
+    loop.close()
 
 if __name__ == '__main__':
     main()
