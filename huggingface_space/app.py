@@ -48,12 +48,20 @@ _sensors = SystemSensors()
 
 def load_config() -> Dict[str, Any]:
     """Load configuration from file."""
+    default_config = {
+        "template": "full",
+        "mode": "transparent",
+        "ollama_url": "http://localhost:11434",
+        "ollama_model": "gemma3:12b"
+    }
     if CONFIG_FILE.exists():
         try:
-            return json.loads(CONFIG_FILE.read_text())
+            config = json.loads(CONFIG_FILE.read_text())
+            # Merge with defaults to ensure all keys exist
+            return {**default_config, **config}
         except:
             pass
-    return {"template": "full", "mode": "transparent"}
+    return default_config
 
 
 def save_config(config: Dict[str, Any]) -> None:
@@ -329,18 +337,81 @@ def get_process_list(search: str = "", sort_by: str = "cpu", limit: int = 50) ->
         return json.dumps({"error": str(e)}, indent=2)
 
 
+# ===== Error Message Helpers =====
+def format_error_response(error: Exception, tool_name: str = None) -> Dict[str, Any]:
+    """Format an error with helpful hints for users."""
+    error_str = str(error)
+    
+    response = {
+        "status": "error",
+        "error": error_str,
+    }
+    
+    # Add specific hints based on error type
+    if "permission" in error_str.lower() or "access denied" in error_str.lower():
+        response["hint"] = "This operation requires elevated permissions. Try running with appropriate privileges or check permission settings."
+        response["suggestion"] = "Use 'Templates' tab to adjust tool permissions, or run systerd-lite with elevated privileges."
+    
+    elif "not found" in error_str.lower() or "no such file" in error_str.lower():
+        response["hint"] = "The requested resource was not found."
+        response["suggestion"] = "Check the file path or resource name and try again."
+    
+    elif "timeout" in error_str.lower():
+        response["hint"] = "The operation timed out."
+        response["suggestion"] = "The service may be slow or unavailable. Try again later or check the service status."
+    
+    elif "connection" in error_str.lower() or "refused" in error_str.lower():
+        response["hint"] = "Could not establish a connection."
+        response["suggestion"] = "Check if the target service (Ollama, systemd, etc.) is running and accessible."
+    
+    elif "ollama" in error_str.lower():
+        response["hint"] = "Ollama AI service is not available."
+        response["suggestion"] = "Configure Ollama URL in the 'Ollama Settings' tab, or start Ollama with: ollama serve"
+    
+    elif "disabled" in error_str.lower():
+        response["hint"] = "This tool is currently disabled."
+        response["suggestion"] = "Enable it using the 'Templates' tab or set_mcp_tool_permission tool."
+    
+    if tool_name:
+        response["tool"] = tool_name
+    
+    return response
+
+
 # ===== Tool Execution =====
 def execute_tool(tool_name: str, arguments_json: str) -> str:
-    """Execute an MCP tool directly."""
+    """Execute an MCP tool directly with improved error handling."""
     handler = get_handler()
     
     if tool_name not in handler.tools:
-        return json.dumps({"error": f"Tool not found: {tool_name}"}, indent=2)
+        return json.dumps({
+            "status": "error",
+            "error": f"Tool not found: {tool_name}",
+            "hint": "Check the tool name spelling or use 'All Tools' button to see available tools.",
+            "available_tools_count": len(handler.tools)
+        }, indent=2)
+    
+    # Check permission
+    perm_mgr = get_context().permission_manager
+    perm = perm_mgr.check(tool_name)
+    if perm.name == "DISABLED":
+        return json.dumps({
+            "status": "error",
+            "error": f"Tool '{tool_name}' is disabled",
+            "permission": perm.name,
+            "hint": "This tool is currently disabled by permission settings.",
+            "suggestion": "Use 'Templates' tab to apply a template that enables this tool, or use set_mcp_tool_permission."
+        }, indent=2)
     
     try:
         args = json.loads(arguments_json) if arguments_json.strip() else {}
     except json.JSONDecodeError as e:
-        return json.dumps({"error": f"Invalid JSON arguments: {e}"}, indent=2)
+        return json.dumps({
+            "status": "error",
+            "error": f"Invalid JSON arguments: {e}",
+            "hint": "Please provide valid JSON format for arguments.",
+            "example": '{"key": "value"} or {} for no arguments'
+        }, indent=2)
     
     try:
         loop = asyncio.new_event_loop()
@@ -349,7 +420,7 @@ def execute_tool(tool_name: str, arguments_json: str) -> str:
         loop.close()
         return json.dumps(result, indent=2, default=str)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        return json.dumps(format_error_response(e, tool_name), indent=2)
 
 
 def get_tool_schema(tool_name: str) -> str:
@@ -357,12 +428,23 @@ def get_tool_schema(tool_name: str) -> str:
     handler = get_handler()
     
     if tool_name not in handler.tools:
-        return json.dumps({"error": f"Tool not found: {tool_name}"}, indent=2)
+        return json.dumps({
+            "status": "error",
+            "error": f"Tool not found: {tool_name}",
+            "hint": "Check the tool name or browse available tools."
+        }, indent=2)
     
     tool = handler.tools[tool_name]
+    
+    # Get permission status
+    perm_mgr = get_context().permission_manager
+    perm = perm_mgr.check(tool_name)
+    
     return json.dumps({
         "name": tool.name,
         "description": tool.description,
+        "permission": perm.name,
+        "enabled": perm.name != "DISABLED",
         "inputSchema": tool.parameters
     }, indent=2)
 
@@ -441,9 +523,9 @@ Configure which tools are enabled. Settings are **saved automatically** to `.sta
 |----------|-------------|-------|
 | `minimal` | Basic monitoring only | ~18 |
 | `monitoring` | System monitoring | ~18 |
-| `development` | Dev tools + containers + self-modification | ~47 |
-| `security` | Security audit tools | ~31 |
-| `full` | **ALL tools enabled** | **199** |
+| `development` | Dev tools + containers + self-modification | ~109 |
+| `security` | Security audit tools | ~47 |
+| `full` | **ALL tools enabled** | **201** |
             """)
             
             with gr.Row():
@@ -458,6 +540,126 @@ Configure which tools are enabled. Settings are **saved automatically** to `.sta
             template_output = gr.Code(label="Result", language="json", lines=15)
             apply_btn.click(apply_template, inputs=[template_dropdown], outputs=[template_output])
             list_btn.click(get_templates, outputs=[template_output])
+        
+        with gr.Tab("🤖 Ollama Settings"):
+            gr.Markdown("### Ollama AI Configuration")
+            gr.Markdown("""
+Configure the Ollama AI backend connection. Settings are **saved automatically** to `.state/config.json`.
+
+**Note:** Ollama is optional. If not available, AI tools will return helpful error messages.
+            """)
+            
+            with gr.Row():
+                ollama_url = gr.Textbox(
+                    label="Ollama URL",
+                    placeholder="http://localhost:11434",
+                    value=config.get("ollama_url", "http://localhost:11434"),
+                    scale=2
+                )
+                ollama_model = gr.Textbox(
+                    label="Default Model",
+                    placeholder="gemma3:12b",
+                    value=config.get("ollama_model", "gemma3:12b"),
+                    scale=1
+                )
+            
+            with gr.Row():
+                ollama_save_btn = gr.Button("💾 Save Settings", variant="primary")
+                ollama_test_btn = gr.Button("🔍 Test Connection")
+                ollama_status_btn = gr.Button("📊 Current Status")
+            
+            ollama_output = gr.Code(label="Result", language="json", lines=10)
+            
+            def save_ollama_settings(url: str, model: str) -> str:
+                """Save Ollama settings to config"""
+                config = load_config()
+                config["ollama_url"] = url.strip() or "http://localhost:11434"
+                config["ollama_model"] = model.strip() or "gemma3:12b"
+                save_config(config)
+                
+                # Update the handler's Ollama manager
+                handler = get_handler()
+                result = handler.ollama.update_config(url=config["ollama_url"], model=config["ollama_model"])
+                result["message"] = "Settings saved to .state/config.json"
+                return json.dumps(result, indent=2)
+            
+            def test_ollama_connection() -> str:
+                """Test Ollama connection"""
+                handler = get_handler()
+                config = handler.ollama.get_config()
+                
+                # Try to ping Ollama
+                try:
+                    import subprocess
+                    result = subprocess.run(
+                        ["curl", "-s", f"{config['base_url']}/api/tags"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if result.returncode == 0:
+                        try:
+                            models = json.loads(result.stdout)
+                            return json.dumps({
+                                "status": "connected",
+                                "url": config["base_url"],
+                                "available_models": [m.get("name") for m in models.get("models", [])],
+                                "current_model": config["default_model"]
+                            }, indent=2)
+                        except:
+                            return json.dumps({
+                                "status": "connected",
+                                "url": config["base_url"],
+                                "raw_response": result.stdout[:500]
+                            }, indent=2)
+                    else:
+                        return json.dumps({
+                            "status": "error",
+                            "message": f"Could not connect to Ollama at {config['base_url']}",
+                            "hint": "Please ensure Ollama is running. Start with: ollama serve"
+                        }, indent=2)
+                except Exception as e:
+                    return json.dumps({
+                        "status": "error",
+                        "message": str(e),
+                        "hint": "Please ensure Ollama is installed and running"
+                    }, indent=2)
+            
+            def get_ollama_status() -> str:
+                """Get current Ollama status"""
+                handler = get_handler()
+                return json.dumps(handler.ollama.get_config(), indent=2)
+            
+            ollama_save_btn.click(save_ollama_settings, inputs=[ollama_url, ollama_model], outputs=[ollama_output])
+            ollama_test_btn.click(test_ollama_connection, outputs=[ollama_output])
+            ollama_status_btn.click(get_ollama_status, outputs=[ollama_output])
+            
+            gr.Markdown("""
+### Popular Models
+
+| Model | Size | Description |
+|-------|------|-------------|
+| `gemma3:12b` | 12B | Google's latest Gemma model |
+| `llama3:8b` | 8B | Meta's Llama 3 |
+| `mistral:7b` | 7B | Mistral AI's model |
+| `codellama:13b` | 13B | Code-focused Llama |
+| `deepseek-coder:6.7b` | 6.7B | DeepSeek Coder |
+
+### MCP Tool Usage
+
+You can also configure Ollama per-call using MCP tools:
+
+```json
+// ai_generate with custom URL/model
+{"prompt": "Hello", "url": "http://custom:11434", "model": "llama3:8b"}
+
+// ai_get_config - get current config
+{}
+
+// ai_set_config - update config
+{"url": "http://localhost:11434", "model": "mistral:7b"}
+```
+            """)
         
         with gr.Tab("🔧 Tool Executor"):
             gr.Markdown("### Execute MCP Tools Directly")
@@ -602,7 +804,7 @@ monitor, control, and optimize Linux systems.
 
 #### License
 
-MIT License
+Apache License 2.0
             """)
     
     return demo

@@ -58,9 +58,11 @@ class Calculator:
         Supports: +, -, *, /, **, sqrt, sin, cos, tan, log, ln, abs, etc.
         """
         try:
-            # Replace constants
+            # Replace constants using word boundaries to avoid partial matches
+            # e.g., don't replace 'c' in 'factorial'
+            import re
             for name, value in self.constants.items():
-                expression = expression.replace(name, str(value))
+                expression = re.sub(rf'\b{name}\b', str(value), expression)
             
             # Safe evaluation environment
             safe_dict = {
@@ -361,3 +363,8 @@ class Calculator:
                 'status': 'error',
                 'error': str(e)
             }
+    
+    # Alias for compatibility
+    def convert_base(self, number: Union[str, int], from_base: int, to_base: int) -> Dict[str, Any]:
+        """Alias for base_conversion for compatibility."""
+        return self.base_conversion(str(number), from_base, to_base)

@@ -532,14 +532,15 @@ class MCPHandler:
         # ===== OLLAMA AI TOOLS (6 tools) =====
         self.register_tool(
             "ai_generate",
-            "Generate text using Ollama AI",
+            "Generate text using Ollama AI. URL and model can be configured in settings or overridden per-call.",
             self.tool_ai_generate,
             {
                 "type": "object",
                 "properties": {
-                    "prompt": {"type": "string"},
-                    "model": {"type": "string", "enum": ["gemma3:12b"], "default": "gemma3:12b"},
-                    "system": {"type": "string"},
+                    "prompt": {"type": "string", "description": "The prompt to generate from"},
+                    "model": {"type": "string", "description": "Model name (e.g., gemma3:12b, llama3, mistral)"},
+                    "url": {"type": "string", "description": "Ollama API URL (e.g., http://localhost:11434)"},
+                    "system": {"type": "string", "description": "System prompt"},
                     "temperature": {"type": "number", "minimum": 0.0, "maximum": 2.0, "default": 0.7},
                 },
                 "required": ["prompt"],
@@ -547,13 +548,14 @@ class MCPHandler:
         )
         self.register_tool(
             "ai_chat",
-            "Chat with Ollama AI",
+            "Chat with Ollama AI. URL and model can be configured in settings or overridden per-call.",
             self.tool_ai_chat,
             {
                 "type": "object",
                 "properties": {
-                    "messages": {"type": "array", "items": {"type": "object"}},
-                    "model": {"type": "string", "enum": ["gemma3:12b"], "default": "gemma3:12b"},
+                    "messages": {"type": "array", "items": {"type": "object"}, "description": "Chat messages [{role, content}]"},
+                    "model": {"type": "string", "description": "Model name (e.g., gemma3:12b, llama3, mistral)"},
+                    "url": {"type": "string", "description": "Ollama API URL (e.g., http://localhost:11434)"},
                     "temperature": {"type": "number", "minimum": 0.0, "maximum": 2.0, "default": 0.7},
                 },
                 "required": ["messages"],
@@ -590,7 +592,7 @@ class MCPHandler:
             {
                 "type": "object",
                 "properties": {
-                    "model": {"type": "string", "enum": ["gemma3:12b"]},
+                    "model": {"type": "string", "description": "Model name (e.g., gemma3:12b, llama3, mistral)"},
                 },
                 "required": ["model"],
             },
@@ -600,6 +602,24 @@ class MCPHandler:
             "List available AI models",
             self.tool_ai_list_models,
             {"type": "object"},
+        )
+        self.register_tool(
+            "ai_get_config",
+            "Get current Ollama configuration (URL, model, status)",
+            self.tool_ai_get_config,
+            {"type": "object"},
+        )
+        self.register_tool(
+            "ai_set_config",
+            "Update Ollama configuration (URL and/or model)",
+            self.tool_ai_set_config,
+            {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Ollama API URL (e.g., http://localhost:11434)"},
+                    "model": {"type": "string", "description": "Default model name (e.g., gemma3:12b)"},
+                },
+            },
         )
         
         # ===== ADDITIONAL MONITORING TOOLS =====
@@ -1392,14 +1412,30 @@ class MCPHandler:
 
     # ===== OLLAMA AI TOOL IMPLEMENTATIONS =====
 
-    async def tool_ai_generate(self, prompt: str, model: str = "gemma3:12b",
+    async def tool_ai_generate(self, prompt: str, model: str = None, url: str = None,
                               system: str = None, temperature: float = 0.7) -> Dict[str, Any]:
-        client = self.ollama.get_client(model)
+        """Generate text with optional URL/model override"""
+        if url is not None:
+            # Use custom URL - create temporary client
+            from .ollama import OllamaClient
+            client = OllamaClient(base_url=url, model=model or self.ollama.default_model)
+        elif model is not None:
+            client = self.ollama.get_client(model)
+        else:
+            client = self.ollama.get_client()
         return await client.generate(prompt, system, temperature)
 
-    async def tool_ai_chat(self, messages: List[Dict[str, str]], model: str = "gemma3:12b",
-                          temperature: float = 0.7) -> Dict[str, Any]:
-        client = self.ollama.get_client(model)
+    async def tool_ai_chat(self, messages: List[Dict[str, str]], model: str = None, 
+                          url: str = None, temperature: float = 0.7) -> Dict[str, Any]:
+        """Chat with optional URL/model override"""
+        if url is not None:
+            # Use custom URL - create temporary client
+            from .ollama import OllamaClient
+            client = OllamaClient(base_url=url, model=model or self.ollama.default_model)
+        elif model is not None:
+            client = self.ollama.get_client(model)
+        else:
+            client = self.ollama.get_client()
         return await client.chat(messages, temperature)
 
     async def tool_ai_analyze_issue(self, issue: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -1418,6 +1454,14 @@ class MCPHandler:
 
     async def tool_ai_list_models(self) -> List[str]:
         return self.ollama.list_available_models()
+
+    async def tool_ai_get_config(self) -> Dict[str, Any]:
+        """Get current Ollama configuration"""
+        return self.ollama.get_config()
+
+    async def tool_ai_set_config(self, url: str = None, model: str = None) -> Dict[str, Any]:
+        """Update Ollama configuration"""
+        return self.ollama.update_config(url=url, model=model)
 
 
     # ===== ADDITIONAL MONITORING TOOL IMPLEMENTATIONS =====
@@ -1677,54 +1721,80 @@ class MCPHandler:
 
     # ===== MCP Configuration Tools =====
     
-    # Tool category mapping
+    # Tool category mapping - must match actual registered tool names
     MCP_TOOL_CATEGORIES = {
         "monitoring": [
             "get_uptime", "get_load_average", "get_disk_usage", "get_cpu_info", "get_memory_info",
             "get_temperature", "get_battery_status", "get_top_processes", "get_zombie_processes",
-            "get_system_info", "list_processes", "monitor_realtime", "get_network_stats"
+            "get_system_info", "list_processes", "monitor_realtime", "get_system_metrics",
+            "get_service_health", "list_zombie_processes", "get_process_tree", "get_memory_map",
+            "lsof_process", "strace_process"
         ],
         "security": [
             "get_selinux_status", "get_apparmor_status", "list_sudo_rules", "audit_permissions",
             "scan_suid_files", "get_failed_logins", "get_security_updates", "add_firewall_rule",
-            "list_firewall_rules", "set_apparmor_mode", "check_system_integrity",
-            "analyze_security_exposure", "check_open_ports"
+            "del_firewall_rule", "list_firewall_rules", "set_apparmor_mode", "check_system_integrity",
+            "check_selinux_status", "check_apparmor_status", "list_open_ports", "list_sudo_users",
+            "check_failed_logins", "scan_listening_services", "check_file_permissions", "list_suid_files",
+            "set_selinux_mode", "set_file_permissions", "analyze_security"
         ],
         "system": [
             "manage_service", "list_units", "get_system_state", "get_kernel_logs",
             "get_environment_variables", "get_kernel_modules", "get_hardware_info",
             "get_pci_devices", "get_usb_devices", "get_cron_jobs", "list_sessions",
-            "get_boot_time", "show_unit_dependencies", "isolate_target"
+            "get_boot_time", "show_unit_dependencies", "isolate_target", "get_unit_properties",
+            "enable_unit", "disable_unit", "mask_unit", "unmask_unit", "reload_systemd",
+            "list_timers", "set_default_target", "get_failed_units", "reset_failed_units",
+            "list_sockets", "analyze_blame", "analyze_critical_chain", "edit_unit", "cat_unit",
+            "start_service", "stop_service", "restart_service", "reload_service", "reboot_system",
+            "get_kernel_version", "list_kernel_modules", "load_kernel_module", "unload_kernel_module",
+            "get_kernel_cmdline", "list_cgroups", "get_cgroup_stats", "set_cgroup_limit",
+            "list_namespaces", "get_capabilities", "get_sysctl", "set_sysctl", "list_cron_jobs",
+            "get_mode", "set_mode", "get_permissions", "list_devices", "control_device",
+            "read_neurobus", "read_journald", "analyze_logs", "get_boot_messages", "clear_journal",
+            "get_log_size", "search_logs"
         ],
         "network": [
-            "list_interfaces", "ping_host", "list_routes", "add_route", "delete_route",
-            "list_dns", "set_dns", "trace_route", "get_listening_sockets"
+            "list_interfaces", "ping_host", "list_routes", "add_route", "del_route",
+            "get_dns_config", "set_dns_servers", "traceroute", "netstat", "get_interface_status",
+            "set_interface_up", "set_interface_down"
         ],
         "container": [
-            "list_containers", "start_container", "stop_container", "restart_container",
-            "remove_container", "run_container", "inspect_container", "get_container_logs",
-            "list_images", "pull_image", "remove_image", "inspect_image", "tag_image", "list_volumes"
+            "list_containers", "stop_container", "remove_container", "get_container_info",
+            "create_python_container", "execute_code", "execute_script", "install_container_packages"
         ],
         "user": [
-            "create_user", "list_logged_users", "get_user_processes", "get_group_info"
+            "create_user", "delete_user", "modify_user", "list_logged_users", "get_user_processes",
+            "get_group_info", "list_users", "list_groups", "create_group", "delete_group",
+            "add_user_to_group", "list_logged_in_users", "get_user_info"
         ],
         "storage": [
             "list_lvm_volumes", "create_lvm_volume", "extend_lvm_volume",
-            "list_mounts", "mount_filesystem", "get_smart_status"
+            "list_mounts", "mount_filesystem", "unmount_filesystem", "get_smart_status",
+            "list_block_devices", "list_mounted_filesystems", "check_filesystem",
+            "list_raid_arrays", "list_inodes", "find_large_files", "get_disk_io_stats",
+            "tune_filesystem"
+        ],
+        "package": [
+            "list_installed_packages", "search_packages", "install_package", "remove_package",
+            "update_package_cache", "upgrade_system", "list_upgradable", "get_package_info",
+            "autoremove_packages", "clean_package_cache"
         ],
         "scheduler": [
-            "create_scheduled_task", "get_upcoming_tasks", "create_reminder", "delete_task"
+            "create_task", "list_tasks", "get_task", "update_task", "cancel_task", "delete_task",
+            "create_reminder", "get_upcoming_tasks"
         ],
         "tuning": [
-            "set_cpu_governor", "tune_process_priority", "set_io_scheduler",
-            "tune_filesystem", "set_nice_level", "interface_up", "interface_down"
+            "set_cpu_governor", "tune_process_priority", "set_io_scheduler"
         ],
         "ai": [
             "ai_chat", "ai_analyze_issue", "ai_suggest_optimization",
-            "ai_generate_text", "ai_list_models", "set_ai_model"
+            "ai_generate", "ai_list_models", "ai_set_model",
+            "ai_get_config", "ai_set_config"
         ],
         "calculator": [
-            "calc_evaluate", "calc_solve", "calc_convert_base", "calc_convert_units", "calc_matrix"
+            "calculate", "solve_equation", "convert_base", "convert_units", "matrix_operation",
+            "statistics"
         ],
         "mcp": [
             "get_mcp_config", "list_mcp_tools", "set_mcp_tool_permission",
@@ -1743,31 +1813,31 @@ class MCPHandler:
             "name": "Minimal",
             "description": "Basic system information only - safe for any environment (MCP config tools always enabled)",
             "categories": ["monitoring", "mcp"],
-            "tool_count": 18
+            "tool_count": 24
         },
         "monitoring": {
             "name": "Monitoring",
             "description": "System monitoring and diagnostics - read-only operations",
             "categories": ["monitoring", "mcp"],
-            "tool_count": 18
+            "tool_count": 24
         },
         "development": {
             "name": "Development",
             "description": "Development focused - monitoring, system, containers, calculator, and self-modification tools",
             "categories": ["monitoring", "system", "container", "calculator", "mcp", "self"],
-            "tool_count": 61
+            "tool_count": 109
         },
         "security": {
             "name": "Security Audit",
             "description": "Security auditing and compliance checking",
             "categories": ["monitoring", "security", "mcp"],
-            "tool_count": 31
+            "tool_count": 47
         },
         "full": {
             "name": "Full Access",
             "description": "All tools enabled - requires appropriate permissions",
             "categories": list(MCP_TOOL_CATEGORIES.keys()),
-            "tool_count": 187
+            "tool_count": 201  # 199 + ai_get_config + ai_set_config
         }
     }
     
