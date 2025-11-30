@@ -163,9 +163,17 @@ class PermissionManager:
         if auto_save:
             self.save()
 
-    def set_permissions_batch(self, permissions_dict: Dict[str, Permission]):
-        """Set multiple permissions at once and save only once."""
-        self.permissions.update(permissions_dict)
+    def set_permissions_batch(self, permissions_dict: Dict[str, Permission], replace: bool = True):
+        """Set multiple permissions at once and save only once.
+        
+        Args:
+            permissions_dict: Dictionary of tool names to permissions
+            replace: If True, replace all permissions. If False, merge with existing.
+        """
+        if replace:
+            self.permissions = permissions_dict.copy()
+        else:
+            self.permissions.update(permissions_dict)
         self.save()
 
     def get_all(self) -> Dict[str, str]:

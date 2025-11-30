@@ -1,4 +1,6 @@
 {
-  "template": "development",
-  "mode": "transparent"
+  "template": "full",
+  "mode": "transparent",
+  "ollama_url": "http://192.168.0.64:11434",
+  "ollama_model": "gemma3:4b"
 }
