@@ -1,0 +1,19 @@
+# systerd-lite for Hugging Face Space
+# Python 3.10+
+
+# Core
+aiohttp>=3.8.0
+psutil>=5.9.0
+
+# UI
+gradio>=4.0.0
+
+# Math/Calculator
+numpy>=1.20.0
+sympy>=1.10.0
+
+# HTTP client
+requests>=2.28.0
+
+# Async
+asyncio-atexit>=1.0.0

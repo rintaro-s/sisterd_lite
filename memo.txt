@@ -1,0 +1,19 @@
+What can you do with MCP?
+pease say in english
+
+Easily retrieve system information using only MCP
+
+Display a list of running python processes (GPT-5 mini)
+
+
+Run a new container of your choice.
+
+
+Is the arduino connected to my computer　using only MCP?
+
+
+
+Tip: There are many MCP functions that can be used, 
+     so there are strengths and weaknesses depending on the model.
+
+     and I can't speak english :D

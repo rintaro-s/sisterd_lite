@@ -1753,9 +1753,9 @@ class MCPHandler:
         },
         "development": {
             "name": "Development",
-            "description": "Development focused - monitoring, containers, calculator, and self-modification tools",
-            "categories": ["monitoring", "container", "calculator", "mcp", "self"],
-            "tool_count": 47
+            "description": "Development focused - monitoring, system, containers, calculator, and self-modification tools",
+            "categories": ["monitoring", "system", "container", "calculator", "mcp", "self"],
+            "tool_count": 61
         },
         "security": {
             "name": "Security Audit",
